@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        (request.auth.token.email == 'mrbanana8461@gmail.com' && request.auth.token.email_verified == true) ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // App Entity Validator
+    function isValidApp(data) {
+      return data.keys().hasAll(['id', 'name', 'version', 'category', 'fileSize', 'status']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.name is string && data.name.size() <= 128 &&
+        data.version is string && data.version.size() <= 32 &&
+        data.category in ['Tools', 'Entertainment', 'Games', 'Productivity', 'Utilities', 'Other'] &&
+        data.fileSize is number && data.fileSize >= 0 &&
+        data.status in ['published', 'draft'];
+    }
+
+    // Applications Collection
+    match /apps/{appId} {
+      // Public visitors can read published apps; Admins can read both published and drafts
+      allow get: if resource.data.status == 'published' || isAdmin();
+      allow list: if resource.data.status == 'published' || isAdmin();
+
+      // Creation: Only verified administrators
+      allow create: if isAdmin() && isValidId(appId) && isValidApp(incoming());
+
+      // Updates: Either Admin full update OR public increment of downloadCount only
+      allow update: if (
+        (isAdmin() && isValidId(appId) && isValidApp(incoming())) ||
+        (
+          resource.data.status == 'published' &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['downloadCount']) &&
+          incoming().downloadCount is number &&
+          incoming().downloadCount == existing().downloadCount + 1
+        )
+      );
+
+      // Deletion: Only administrators
+      allow delete: if isAdmin() && isValidId(appId);
+    }
+
+    // Categories Collection
+    match /categories/{categoryId} {
+      allow get, list: if true;
+      allow write: if isAdmin() && isValidId(categoryId);
+    }
+
+    // Administrator Roles Collection
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow write: if false; // Restricted to Firebase Console or Admin SDK
+    }
+
+    // Download Telemetry Collection
+    match /download_events/{eventId} {
+      allow create: if isValidId(eventId) && 
+        incoming().keys().hasAll(['id', 'appId', 'timestamp']) &&
+        incoming().id is string && incoming().appId is string;
+      allow read: if isAdmin();
+      allow update, delete: if false;
+    }
+
+    // Global Settings Collection
+    match /settings/{settingId} {
+      allow get, list: if true;
+      allow write: if isAdmin() && isValidId(settingId);
+    }
+  }
+}

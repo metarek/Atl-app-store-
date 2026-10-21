@@ -1,0 +1,108 @@
+{
+  "entities": {
+    "App": {
+      "title": "Application",
+      "description": "Android APK application distribution record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 128 },
+        "packageName": { "type": "string", "maxLength": 128 },
+        "version": { "type": "string", "maxLength": 32 },
+        "versionCode": { "type": "number" },
+        "fileSize": { "type": "number" },
+        "fileSizeFormatted": { "type": "string", "maxLength": 32 },
+        "apkStoragePath": { "type": "string", "maxLength": 512 },
+        "apkUrl": { "type": "string", "maxLength": 1024 },
+        "fileName": { "type": "string", "maxLength": 256 },
+        "sha256": { "type": "string", "maxLength": 64 },
+        "category": { "type": "string", "enum": ["Tools", "Entertainment", "Games", "Productivity", "Utilities", "Other"] },
+        "developer": { "type": "string", "maxLength": 128 },
+        "iconUrl": { "type": "string", "maxLength": 1024 },
+        "shortDescription": { "type": "string", "maxLength": 500 },
+        "fullDescription": { "type": "string", "maxLength": 10000 },
+        "changelog": { "type": "string", "maxLength": 5000 },
+        "minAndroid": { "type": "string", "maxLength": 64 },
+        "minSdk": { "type": "number" },
+        "downloadCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["published", "draft"] },
+        "featured": { "type": "boolean" },
+        "rating": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "version", "category", "fileSize", "status"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "App store application category",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 256 },
+        "icon": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name"]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Administrator authorization record",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["admin", "superadmin"] },
+        "grantedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "role"]
+    },
+    "DownloadEvent": {
+      "title": "DownloadEvent",
+      "description": "Tracking record for APK download event",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "appId": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "ipHash": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "appId", "timestamp"]
+    },
+    "WebsiteSettings": {
+      "title": "WebsiteSettings",
+      "description": "Global website configuration and metadata",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "maxLength": 128 },
+        "tagline": { "type": "string", "maxLength": 256 },
+        "contactEmail": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["storeName"]
+    }
+  },
+  "firestore": {
+    "/apps/{appId}": {
+      "schema": "App",
+      "description": "Collection of published and draft Android applications"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Collection of application categories"
+    },
+    "/admins/{adminId}": {
+      "schema": "AdminRole",
+      "description": "Collection of authenticated administrator roles"
+    },
+    "/download_events/{eventId}": {
+      "schema": "DownloadEvent",
+      "description": "Collection of verified download telemetry events"
+    },
+    "/settings/{settingId}": {
+      "schema": "WebsiteSettings",
+      "description": "Global store settings and branding options"
+    }
+  }
+}
