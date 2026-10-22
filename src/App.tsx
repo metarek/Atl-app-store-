@@ -102,30 +102,11 @@ export default function App() {
   }, [fetchApps]);
 
   // Handle Download APK
-  const handleDownloadApp = (app: AppItem, e?: React.MouseEvent) => {
+  const handleDownloadApp = async (app: AppItem, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
 
-    // Trigger browser download of actual APK file
-    let downloadUrl = app.apkUrl;
-    let isBlob = false;
-
-    // If URL is not a direct storage or http link, generate genuine APK binary blob
-    if (!downloadUrl || !downloadUrl.startsWith('http')) {
-      const apkBlob = createSampleApkBlob(app.name, app.version);
-      downloadUrl = URL.createObjectURL(apkBlob);
-      isBlob = true;
-    }
-
-    const link = document.createElement('a');
-    link.href = downloadUrl;
-    link.setAttribute('download', app.fileName || `${app.name.replace(/\s+/g, '_')}-${app.version}.apk`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    if (isBlob) {
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 10000);
-    }
+    // Trigger browser download of genuine uploaded or generated APK file
+    await api.downloadAppFile(app);
 
     // Record download event in Cloud Firestore
     firebaseService.recordDownload(app.id).catch(() => {});

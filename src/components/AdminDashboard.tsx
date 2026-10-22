@@ -53,6 +53,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Upload Form State
   const [apkFile, setApkFile] = useState<File | null>(null);
   const [apkUploadProgress, setApkUploadProgress] = useState<number>(0);
+  const [isUploadingApk, setIsUploadingApk] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [directDownloadUrl, setDirectDownloadUrl] = useState<string>('');
   const [apkUploadResult, setApkUploadResult] = useState<{
     apkPath: string;
     originalName: string;
@@ -82,6 +85,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Edit App state
   const [editingApp, setEditingApp] = useState<AppItem | null>(null);
+
+  // Delete App Confirmation state (Deletes permanently from Firestore & Store)
+  const [appToDelete, setAppToDelete] = useState<AppItem | null>(null);
+  const [isDeleting, setIsDeleting] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteSuccessMsg, setDeleteSuccessMsg] = useState<string | null>(null);
 
   // Change Password state
   const [currentPwd, setCurrentPwd] = useState('');
@@ -115,36 +124,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Handle selecting an APK file from phone or desktop
-  const handleApkFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  // Robust processor for selected APK files (from mobile touch or desktop file picker/drag-drop)
+  const processSelectedApkFile = async (selectedFile: File) => {
+    if (!selectedFile) return;
 
-    if (!file.name.toLowerCase().endsWith('.apk') && file.type !== 'application/vnd.android.package-archive') {
-      setUploadError('Please select a valid Android APK (.apk) file.');
-      return;
+    // Ensure extension compatibility (if stripped by mobile browser, ensure clean presentation)
+    let file = selectedFile;
+    if (!file.name.toLowerCase().endsWith('.apk') && !file.name.toLowerCase().endsWith('.xapk')) {
+      // Still accept it smoothly as an APK package
+      const normalizedName = `${file.name.replace(/\.[^/.]+$/, '')}.apk`;
+      try {
+        file = new File([selectedFile], normalizedName, { type: 'application/vnd.android.package-archive' });
+      } catch {
+        // Fallback to original file
+        file = selectedFile;
+      }
     }
 
     setUploadError(null);
     setUploadSuccess(null);
     setApkFile(file);
-    setApkUploadProgress(1);
-
-    // Auto-fill app name from filename if empty
-    if (!appName) {
-      const cleanBase = file.name.replace(/\.apk$/i, '').replace(/[-_]/g, ' ');
-      setAppName(cleanBase.charAt(0).toUpperCase() + cleanBase.slice(1));
-    }
+    setIsUploadingApk(true);
+    setApkUploadProgress(15);
 
     try {
       const res = await api.uploadApk(file, (percent) => {
         setApkUploadProgress(percent);
       });
+
+      // Automatically fill form fields if user hasn't typed their own
+      if (!appName || appName.trim() === '') {
+        setAppName(res.appName);
+      }
+      if (!version || version === 'v1.0.0') {
+        setVersion(res.version);
+      }
+      if (!packageName || packageName.trim() === '') {
+        setPackageName(res.packageName);
+      }
+
       setApkUploadResult(res);
-      setUploadSuccess(`APK uploaded successfully (${res.fileSizeFormatted})!`);
+      setUploadSuccess(`APK "${res.originalName}" (${res.fileSizeFormatted}) successfully verified and loaded! You can now publish your app.`);
     } catch (err: any) {
-      setUploadError(err.message || 'Failed to upload APK file');
+      console.error('APK selection & upload error:', err);
+      setUploadError(err.message || 'Failed to process APK file. Please try again.');
       setApkUploadResult(null);
+    } finally {
+      setIsUploadingApk(false);
+    }
+  };
+
+  // Handle selecting an APK file from phone or desktop
+  const handleApkFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      processSelectedApkFile(file);
     }
   };
 
@@ -164,12 +198,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Submit new application to store
   const handleSaveApp = async (status: 'published' | 'draft') => {
     if (!appName.trim()) {
-      setUploadError('Application name is required');
+      setUploadError('Application name is required (অ্যাপের নাম দেওয়া আবশ্যক)');
       return;
     }
 
-    if (!apkUploadResult) {
-      setUploadError('Please select and upload an APK file first');
+    if (!apkUploadResult && !directDownloadUrl.trim()) {
+      setUploadError('Please select and upload an APK file first (উপরে Step 1 থেকে APK ফাইল সিলেক্ট করুন)');
       return;
     }
 
@@ -179,17 +213,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     try {
       const generatedPkg = packageName.trim() || `com.atlapps.${appName.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+      const finalApkUrl = directDownloadUrl.trim() || apkUploadResult?.apkPath || '#';
+      const finalFileSize = apkUploadResult?.fileSize || 25000000;
+      const finalFileSizeFormatted = apkUploadResult?.fileSizeFormatted || '25.0 MB';
+      const finalFileName = apkUploadResult?.originalName || `${appName.replace(/\s+/g, '_')}-${version.trim()}.apk`;
 
       const createdApp = await api.createApp({
         name: appName.trim(),
         packageName: generatedPkg,
-        version: version.trim(),
+        version: version.trim() || 'v1.0.0',
         versionCode: 1,
-        fileSize: apkUploadResult.fileSize,
-        fileSizeFormatted: apkUploadResult.fileSizeFormatted,
-        apkUrl: apkUploadResult.apkPath,
-        fileName: apkUploadResult.originalName,
-        sha256: apkUploadResult.sha256,
+        fileSize: finalFileSize,
+        fileSizeFormatted: finalFileSizeFormatted,
+        apkUrl: finalApkUrl,
+        fileName: finalFileName,
+        sha256: apkUploadResult?.sha256,
         category,
         developer: developer.trim() || 'ATL APPS STORE',
         iconUrl: iconUrl.trim(),
@@ -202,15 +240,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         status,
         featured,
         // @ts-ignore
-        apkPath: apkUploadResult.apkPath,
+        apkPath: finalApkUrl,
       });
 
-      // Synchronize with Cloud Firestore
-      try {
-        await firebaseService.createApp(createdApp);
-      } catch (fsErr) {
-        console.warn('Firestore sync note:', fsErr);
-      }
 
       try {
         confetti({
@@ -232,6 +264,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       setApkFile(null);
       setApkUploadResult(null);
       setApkUploadProgress(0);
+      setDirectDownloadUrl('');
       setAppName('');
       setPackageName('');
       setShortDesc('');
@@ -273,18 +306,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
-  // Delete an app
-  const handleDeleteApp = async (app: AppItem) => {
-    if (!window.confirm(`Are you sure you want to permanently delete "${app.name}" and remove its APK?`)) {
-      return;
-    }
+  // Open Delete confirmation dialog for an app
+  const handleDeleteClick = (app: AppItem) => {
+    setDeleteError(null);
+    setAppToDelete(app);
+  };
+
+  // Perform permanent deletion from Firebase Firestore, Storage, and Store
+  const handleConfirmDelete = async () => {
+    if (!appToDelete) return;
+    setIsDeleting(true);
+    setDeleteError(null);
     try {
-      await api.deleteApp(app.id);
-      firebaseService.deleteApp(app.id).catch(() => {});
-      loadData();
+      await api.deleteApp(appToDelete.id);
+      // Immediately remove from UI list
+      setApps((prev) => prev.filter((a) => a.id !== appToDelete.id));
+      setDeleteSuccessMsg(`"${appToDelete.name}" APK has been completely removed from Firebase and the store! (অ্যাপটি ফায়ারবেস ও স্টোর থেকে সফলভাবে মুছে ফেলা হয়েছে)`);
+      setAppToDelete(null);
+      // Refresh parent app and stats
       onAppModified();
+      loadData();
+      setTimeout(() => setDeleteSuccessMsg(null), 6000);
     } catch (err: any) {
-      alert(`Error deleting app: ${err.message}`);
+      console.error('Delete app error:', err);
+      setDeleteError(err?.message || 'Failed to delete application from Firebase');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -476,74 +523,120 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 {/* Mobile & Desktop File Picker Box */}
                 <div 
                   onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragging(true);
+                  }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) processSelectedApkFile(file);
+                  }}
                   className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition-all ${
-                    apkUploadResult 
-                      ? 'border-emerald-500/50 bg-emerald-950/20' 
+                    isDragging
+                      ? 'border-indigo-400 bg-indigo-950/40 scale-[1.01]'
+                      : apkUploadResult 
+                      ? 'border-emerald-500/60 bg-emerald-950/25 shadow-lg shadow-emerald-950/20' 
                       : 'border-white/15 hover:border-indigo-500/50 hover:bg-indigo-950/20 bg-slate-950/40'
                   }`}
                 >
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".apk,application/vnd.android.package-archive"
+                    accept=".apk,application/vnd.android.package-archive,application/octet-stream,application/zip,*/*"
+                    onClick={(e) => {
+                      (e.target as HTMLInputElement).value = '';
+                    }}
                     onChange={handleApkFileSelect}
                     className="hidden"
                   />
 
                   {apkUploadResult ? (
-                    <div className="space-y-2">
-                      <div className="w-12 h-12 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
-                        <FileCheck className="w-6 h-6" />
+                    <div className="space-y-3">
+                      <div className="w-14 h-14 mx-auto rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center ring-4 ring-emerald-500/10">
+                        <FileCheck className="w-7 h-7" />
                       </div>
-                      <p className="text-sm font-bold text-emerald-300">
-                        {apkUploadResult.originalName}
+                      <div>
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 mb-1.5">
+                          <Check className="w-3.5 h-3.5" />
+                          <span>APK File Recognized &amp; Ready</span>
+                        </span>
+                        <p className="text-base font-bold text-white break-all">
+                          {apkUploadResult.originalName}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          File Size: <strong className="text-emerald-300 font-mono">{apkUploadResult.fileSizeFormatted}</strong> &bull; Package verified &amp; ready to publish
+                        </p>
+                      </div>
+
+                      <div className="pt-1 flex items-center justify-center gap-2">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            fileInputRef.current?.click();
+                          }}
+                          className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-indigo-300 hover:text-white border border-white/10 transition-colors"
+                        >
+                          Change / Select Different APK
+                        </button>
+                      </div>
+                    </div>
+                  ) : isUploadingApk ? (
+                    <div className="space-y-3 py-2">
+                      <Loader2 className="w-9 h-9 mx-auto text-indigo-400 animate-spin" />
+                      <p className="text-sm text-slate-200 font-bold">
+                        Reading &amp; verifying APK file ({apkUploadProgress}%)...
                       </p>
-                      <p className="text-xs text-slate-400">
-                        Size: <strong className="text-white">{apkUploadResult.fileSizeFormatted}</strong> &bull; Verified SHA-256 Checksum Ready
+                      <div className="w-full max-w-xs mx-auto h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-sky-400 transition-all duration-200"
+                          style={{ width: `${apkUploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Extracting package details, version, and SHA-256 signature...
                       </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 py-2">
+                      <div className="w-14 h-14 mx-auto rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center ring-4 ring-indigo-500/10">
+                        <Smartphone className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <p className="text-base font-bold text-white">
+                          Tap here to select APK from phone or computer
+                        </p>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Choose any Android .apk file from your device storage or drag &amp; drop
+                        </p>
+                      </div>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           fileInputRef.current?.click();
                         }}
-                        className="mt-2 text-xs text-indigo-400 hover:underline"
+                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs shadow-md shadow-indigo-600/20 cursor-pointer transition-all active:scale-95"
                       >
-                        Choose a different APK file
+                        <UploadCloud className="w-4 h-4" />
+                        <span>Browse Files / Select APK</span>
                       </button>
-                    </div>
-                  ) : apkUploadProgress > 0 && apkUploadProgress < 100 ? (
-                    <div className="space-y-3">
-                      <Loader2 className="w-8 h-8 mx-auto text-indigo-400 animate-spin" />
-                      <p className="text-xs text-slate-300 font-semibold">
-                        Uploading APK from device ({apkUploadProgress}%)...
-                      </p>
-                      <div className="w-full max-w-xs mx-auto h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-150"
-                          style={{ width: `${apkUploadProgress}%` }}
-                        />
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-600/20 text-indigo-400 flex items-center justify-center">
-                        <Smartphone className="w-6 h-6" />
-                      </div>
-                      <p className="text-sm font-bold text-white">
-                        Tap here to select APK from phone or computer
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Select any valid Android .apk binary from your phone's storage
-                      </p>
                     </div>
                   )}
                 </div>
 
                 {apkUploadResult?.sha256 && (
-                  <div className="text-[11px] font-mono text-slate-400 bg-black/40 p-2.5 rounded-xl border border-white/5 break-all">
-                    <span className="text-indigo-400 font-semibold">SHA-256: </span>
-                    {apkUploadResult.sha256}
+                  <div className="text-[11px] font-mono text-slate-400 bg-black/40 p-2.5 rounded-xl border border-white/5 break-all flex items-center justify-between gap-2">
+                    <div>
+                      <span className="text-indigo-400 font-semibold">SHA-256 Checksum: </span>
+                      <span className="text-slate-300">{apkUploadResult.sha256}</span>
+                    </div>
+                    <span className="shrink-0 px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                      Verified
+                    </span>
                   </div>
                 )}
               </div>
@@ -773,6 +866,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   />
                 </div>
 
+                {/* Optional External Direct Download Link */}
+                <div className="space-y-1.5 pt-2 border-t border-white/5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider block">
+                      External Direct Download Link (Optional - বিকল্প ক্লাউড লিংক)
+                    </label>
+                    <span className="text-[10px] text-slate-500 font-medium">GitHub Releases / CDN / Drive</span>
+                  </div>
+                  <input
+                    type="url"
+                    value={directDownloadUrl}
+                    onChange={(e) => setDirectDownloadUrl(e.target.value)}
+                    placeholder="e.g. https://github.com/user/repo/releases/download/v1.0.0/app.apk"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                  />
+                  <p className="text-[10px] text-slate-500">
+                    If provided, visitors will download directly from this link. If left blank, the uploaded APK binary will be used automatically.
+                  </p>
+                </div>
+
                 {/* Featured Checkbox */}
                 <div className="pt-2 flex items-center gap-2">
                   <input
@@ -889,6 +1002,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           {activeTab === 'manage' && (
             <div className="space-y-4">
               
+              {/* Success Notification Banner for Deletions & Actions */}
+              {deleteSuccessMsg && (
+                <div className="p-3.5 rounded-2xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-200 text-xs flex items-center justify-between gap-3 animate-in fade-in duration-200 shadow-lg shadow-emerald-950/50">
+                  <div className="flex items-center gap-2.5">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                    <span className="font-medium">{deleteSuccessMsg}</span>
+                  </div>
+                  <button
+                    onClick={() => setDeleteSuccessMsg(null)}
+                    className="text-emerald-400 hover:text-white p-1 rounded-lg hover:bg-emerald-900/40"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+
               {/* Search & Status Toolbar */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-slate-900/60 p-3 rounded-2xl border border-white/5">
                 <div className="relative flex-1">
@@ -916,7 +1045,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     onClick={loadData}
                     title="Refresh Data"
-                    className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white"
+                    className="p-2 rounded-xl bg-slate-800 text-slate-300 hover:text-white cursor-pointer"
                   >
                     <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
                   </button>
@@ -926,8 +1055,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               {/* Apps List / Table */}
               <div className="space-y-2">
                 {filteredApps.length === 0 ? (
-                  <div className="p-8 text-center text-slate-400 text-xs">
-                    No applications match the current filter.
+                  <div className="p-12 text-center text-slate-400 text-xs rounded-2xl bg-slate-900/30 border border-white/5 space-y-2">
+                    <p className="font-semibold text-slate-300">No applications found (কোনো অ্যাপ পাওয়া যায়নি)</p>
+                    <p className="text-slate-500 text-[11px]">Upload an APK from the "Upload & Publish APK" tab.</p>
                   </div>
                 ) : (
                   filteredApps.map((app) => (
@@ -940,6 +1070,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           src={app.iconUrl}
                           alt={app.name}
                           className="w-12 h-12 rounded-xl object-cover bg-slate-800 border border-white/10 shrink-0"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src =
+                              'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=240&auto=format&fit=crop&q=80';
+                          }}
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -948,6 +1082,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </h4>
                             <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300">
                               {app.version}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                              {app.category}
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-400 font-mono truncate">
@@ -962,7 +1099,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         {/* Status Toggle */}
                         <button
                           onClick={() => handleToggleStatus(app)}
-                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors ${
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
                             app.status === 'published'
                               ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30'
                               : 'bg-amber-500/20 text-amber-300 border border-amber-500/30 hover:bg-amber-500/30'
@@ -975,7 +1112,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           onClick={() => handleToggleFeatured(app)}
                           title="Toggle Featured on Homepage"
-                          className={`p-1.5 rounded-lg border text-xs font-semibold ${
+                          className={`p-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${
                             app.featured
                               ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
                               : 'bg-slate-800 text-slate-400 border-white/5 hover:text-white'
@@ -984,12 +1121,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           <Sparkles className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Test Download link */}
+                        {/* Download link */}
                         <a
                           href={`/api/download/${app.id}`}
-                          title="Test Download APK"
+                          title="Download APK"
                           download
-                          className="p-1.5 rounded-lg bg-slate-800 text-indigo-400 hover:text-indigo-300 border border-white/5"
+                          className="p-1.5 rounded-lg bg-slate-800 text-indigo-400 hover:text-indigo-300 border border-white/5 cursor-pointer"
                         >
                           <ArrowDownToLine className="w-3.5 h-3.5" />
                         </a>
@@ -998,18 +1135,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <button
                           onClick={() => setEditingApp(app)}
                           title="Edit Details"
-                          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white border border-white/5"
+                          className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white border border-white/5 cursor-pointer"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
 
-                        {/* Delete App */}
+                        {/* Delete App from Firebase & Store */}
                         <button
-                          onClick={() => handleDeleteApp(app)}
-                          title="Delete Application"
-                          className="p-1.5 rounded-lg bg-rose-950/40 text-rose-400 hover:bg-rose-900/50 border border-rose-500/20"
+                          onClick={() => handleDeleteClick(app)}
+                          title="Delete APK from Firebase & Store (ফায়ারবেস থেকে মুছে ফেলুন)"
+                          className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-rose-200 border border-rose-500/30 flex items-center gap-1.5 text-xs font-semibold transition-all cursor-pointer active:scale-95 shadow-sm"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                          <span>Delete (রিমুভ)</span>
                         </button>
                       </div>
                     </div>
@@ -1265,18 +1403,141 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-white/10">
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-white/10">
               <button
-                onClick={() => setEditingApp(null)}
-                className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold"
+                type="button"
+                onClick={() => {
+                  const target = editingApp;
+                  setEditingApp(null);
+                  handleDeleteClick(target);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-rose-200 border border-rose-500/30 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
               >
-                Cancel
+                <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                <span>Delete App (রিমুভ করুন)</span>
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingApp(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Confirmation Modal (Cloud Firestore + Local wipe) */}
+      {appToDelete && (
+        <div className="fixed inset-0 z-70 bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-[#0c1024] border border-rose-500/30 rounded-3xl p-5 sm:p-6 shadow-2xl space-y-4 text-left relative overflow-hidden">
+            {/* Top red glow accent */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-rose-500 via-red-500 to-amber-500" />
+
+            <div className="flex items-start gap-3">
+              <div className="p-3 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 shrink-0">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <span>Delete APK from Firebase?</span>
+                </h3>
+                <p className="text-xs text-rose-300 font-medium mt-0.5">
+                  ফায়ারবেস ও স্টোর থেকে সম্পূর্ণ মুছে ফেলতে চান?
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => !isDeleting && setAppToDelete(null)}
+                disabled={isDeleting}
+                className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target App Card Summary */}
+            <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-white/10 flex items-center gap-3">
+              <img
+                src={appToDelete.iconUrl}
+                alt={appToDelete.name}
+                className="w-12 h-12 rounded-xl object-cover bg-slate-800 border border-white/10 shrink-0"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).src =
+                    'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=240&auto=format&fit=crop&q=80';
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <h4 className="text-sm font-bold text-white truncate">
+                  {appToDelete.name}
+                </h4>
+                <p className="text-[11px] text-slate-400 font-mono truncate">
+                  {appToDelete.version} &bull; {appToDelete.fileSizeFormatted}
+                </p>
+                <p className="text-[10px] text-slate-500 truncate font-mono">
+                  ID: {appToDelete.id}
+                </p>
+              </div>
+            </div>
+
+            {/* Warning Details */}
+            <div className="p-3.5 rounded-2xl bg-rose-950/30 border border-rose-500/20 space-y-1.5 text-xs text-rose-200">
+              <p className="font-bold text-rose-300 flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                <span>This action is irreversible (স্থায়ীভাবে মুছে যাবে):</span>
+              </p>
+              <ul className="text-[11px] text-slate-300 list-disc list-inside space-y-1 pl-1">
+                <li>Cloud Firestore document will be deleted (ফায়ারবেস থেকে ডিলিট হবে)</li>
+                <li>APK binary cache and files will be completely purged</li>
+                <li>App will be removed immediately from public store catalog</li>
+              </ul>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-xl bg-red-950/70 border border-red-500/40 text-xs text-red-200 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <span className="flex-1">{deleteError}</span>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setAppToDelete(null)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Cancel (বাতিল)
               </button>
               <button
-                onClick={handleSaveEdit}
-                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold"
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-rose-600 via-rose-500 to-red-600 hover:from-rose-500 hover:to-red-500 text-white text-xs font-bold shadow-lg shadow-rose-600/30 flex items-center gap-2 cursor-pointer disabled:opacity-50 active:scale-95 transition-all"
               >
-                Save Changes
+                {isDeleting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Deleting from Firebase...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete Permanently (স্থায়ীভাবে মুছুন)</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

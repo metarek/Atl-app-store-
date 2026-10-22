@@ -101,10 +101,6 @@ export const firebaseService = {
   },
 
   async getAllApps(): Promise<AppItem[]> {
-    // If not signed in to Firebase, only query published apps to respect security rules
-    if (!auth.currentUser) {
-      return this.getPublishedApps();
-    }
     try {
       const snapshot = await getDocs(collection(db, APPS_PATH));
       const items: AppItem[] = [];
@@ -168,8 +164,16 @@ export const firebaseService = {
       updatedAt: new Date().toISOString(),
     };
 
+    // Clean undefined fields to prevent Firestore unsupported field value errors
+    const cleanedApp: Record<string, any> = {};
+    for (const [key, value] of Object.entries(fullApp)) {
+      if (value !== undefined) {
+        cleanedApp[key] = value;
+      }
+    }
+
     try {
-      await setDoc(doc(db, APPS_PATH, id), fullApp);
+      await setDoc(doc(db, APPS_PATH, id), cleanedApp);
       return fullApp;
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, `${APPS_PATH}/${id}`);
@@ -180,10 +184,16 @@ export const firebaseService = {
   async updateApp(id: string, updates: Partial<AppItem>): Promise<void> {
     try {
       const docRef = doc(db, APPS_PATH, id);
-      await updateDoc(docRef, {
+      const cleanedUpdates: Record<string, any> = {
         ...updates,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      for (const [key, val] of Object.entries(cleanedUpdates)) {
+        if (val === undefined) {
+          delete cleanedUpdates[key];
+        }
+      }
+      await updateDoc(docRef, cleanedUpdates);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${APPS_PATH}/${id}`);
     }
